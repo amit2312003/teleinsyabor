@@ -9,17 +9,16 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, ConversationHandler, MessageHandler, Filters
 import logging
 
 TELEGRAM_TOKEN = "8103775533:AAGuXitKiY9USeGPlk792TPjDH7F7rNoFjg"
 INSTAGRAM_SIGNUP_URL = "https://www.instagram.com/accounts/emailsignup/"
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Manual mode states
+EMAIL, PASSWORD = range(2)
 
 def fetch_proxies_spys_one():
     proxy_url = "https://spys.me/proxy.txt"
@@ -47,41 +46,6 @@ def generate_username():
     suffix = ''.join(random.choices(string.digits, k=4))
     return f"{prefix}{suffix}"
 
-def generate_password():
-    chars = string.ascii_letters + string.digits + "!@#$%"
-    return ''.join(random.choices(chars, k=12))
-
-# Mail.tm API functions
-def create_mailtm_account():
-    domains = requests.get("https://api.mail.tm/domains").json()["hydra:member"]
-    domain = random.choice(domains)["domain"]
-    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    email = f"{username}@{domain}"
-    resp = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
-    if resp.status_code not in [200, 201]:
-        raise Exception("Couldn't create mail.tm account")
-    resp = requests.post("https://api.mail.tm/token", json={"address": email, "password": password})
-    token = resp.json()["token"]
-    return email, password, token
-
-def get_mailtm_otp(token, sender="instagram"):
-    headers = {"Authorization": f"Bearer {token}"}
-    for _ in range(30):
-        r = requests.get("https://api.mail.tm/messages", headers=headers)
-        mails = r.json().get("hydra:member", [])
-        for mail in mails:
-            subject = mail.get("subject", "").lower()
-            if sender in subject:
-                msgid = mail["id"]
-                msg = requests.get(f"https://api.mail.tm/messages/{msgid}", headers=headers).json()
-                text = msg.get("text", "")
-                m = re.search(r"\b(\d{6})\b", text)
-                if m:
-                    return m.group(1)
-        time.sleep(5)
-    return None
-
 def setup_driver(proxy=None):
     options = Options()
     options.add_argument("--headless")
@@ -94,7 +58,6 @@ def setup_driver(proxy=None):
     if proxy:
         options.add_argument(f'--proxy-server=http://{proxy}')
         logger.info(f"Using proxy: {proxy}")
-    # Use the chromedriver binary installed from Dockerfile!
     service = Service('/usr/bin/chromedriver')
     return webdriver.Chrome(service=service, options=options)
 
@@ -125,18 +88,14 @@ def switch_to_creator_account(driver, wait):
         driver.get("https://www.instagram.com/accounts/edit/")
         time.sleep(5)
         try:
-            switch_button = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//div[contains(text(),'Switch to professional account')]")
-            ))
+            switch_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(),'Switch to professional account')]")))
             switch_button.click()
             time.sleep(3)
         except:
             driver.get("https://www.instagram.com/accounts/convert_to_professional_account/")
             time.sleep(3)
         try:
-            creator_button = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//div[contains(text(),'Creator')]//ancestor::button")
-            ))
+            creator_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(),'Creator')]//ancestor::button")))
             creator_button.click()
             time.sleep(2)
             next_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Next')]")
@@ -145,9 +104,7 @@ def switch_to_creator_account(driver, wait):
         except Exception as e:
             logger.error(f"Error selecting creator: {e}")
         try:
-            personal_category = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//div[contains(text(),'Personal') or contains(text(),'Blog')]//ancestor::button")
-            ))
+            personal_category = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(),'Personal') or contains(text(),'Blog')]//ancestor::button")))
             personal_category.click()
             time.sleep(2)
             done_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Done') or contains(text(),'Next')]")
@@ -168,16 +125,12 @@ def switch_to_creator_account(driver, wait):
         logger.error(f"Error switching to professional: {e}")
         return False
 
-def create_instagram_account():
+def create_instagram_account(email, password):
     driver = None
     try:
         proxies_list = fetch_proxies_spys_one()
         proxy = random.choice(proxies_list) if proxies_list else None
-
-        # Mail.tm email
-        email, mailtmpass, mailtmtoken = create_mailtm_account()
         full_name = generate_random_name()
-        password = generate_password()
         driver = setup_driver(proxy)
         wait = WebDriverWait(driver, 15)
         username = get_available_username(driver, wait, full_name, password, email)
@@ -194,7 +147,6 @@ def create_instagram_account():
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
         logger.info("Submitted signup form")
         time.sleep(5)
-        # birthday
         try:
             month_select = driver.find_element(By.XPATH, "//select[@title='Month:']")
             month_select.send_keys("January")
@@ -207,34 +159,16 @@ def create_instagram_account():
             time.sleep(3)
         except Exception:
             pass
-        otp = get_mailtm_otp(mailtmtoken)
-        if not otp:
-            driver.quit()
-            return f"❌ Could not get OTP from mail.tm for: {email}"
-        try:
-            otp_input = wait.until(EC.presence_of_element_located((By.NAME, "email_confirmation_code")))
-            otp_input.clear()
-            otp_input.send_keys(otp)
-            time.sleep(1)
-            confirm_button = driver.find_element(By.XPATH, "//button[contains(text(),'Next') or contains(text(),'Confirm')]")
-            confirm_button.click()
-            logger.info("OTP submitted successfully")
-            time.sleep(5)
-        except Exception as e:
-            logger.error(f"Error submitting OTP: {e}")
-            driver.quit()
-            return f"❌ Failed to submit OTP\n📧 Email: {email}\n👤 Username: {username}\n🔐 Password: {password}"
-        switch_to_creator_account(driver, wait)
+        # You must now handle the OTP confirmation step manually in Telegram. Bot will pause here.
         driver.quit()
         return (
-            f"✅ Instagram Account Created Successfully!\n\n"
+            f"✅ Instagram Account Created (check your email manually for OTP)!\n\n"
             f"📧 Email: {email}\n"
             f"👤 Username: {username}\n"
             f"🔐 Password: {password}\n"
             f"👥 Name: {full_name}\n"
-            f"💼 Type: Creator (Personal)\n"
+            f"💼 Type: Creator (Manual, OTP required)\n"
             f"🧑‍💻 Proxy Used: {proxy}\n"
-            f"📨 OTP Source: mail.tm"
         )
     except Exception as e:
         if driver:
@@ -242,40 +176,52 @@ def create_instagram_account():
         logger.error(f"Error creating account: {e}")
         return f"❌ Error: {str(e)}"
 
+# Telegram Handlers
+
 def start(update, context):
-    update.message.reply_text(
-        "🤖 Instagram Account Creator Bot\n\n"
-        "/create - Auto-create Instagram account using mail.tm and live proxies\n"
-        "⚠️ Educational purposes only"
-    )
+    update.message.reply_text("🤖 Instagram Account Creator Bot\n\n"
+                              "/manual - Enter your email/password for registration (admin)\n"
+                              "⚠️ You will need to check your email and enter OTP manually.")
 
-def help_command(update, context):
-    update.message.reply_text(
-        "📖 How to use:\n"
-        "1. Send /create\n"
-        "2. Bot will use a random IP (proxy), register email, and fetch everything for you\n"
-        "3. Wait for account details!"
-    )
+def manual_start(update, context):
+    update.message.reply_text("✉️ Enter the email address you want to use for Instagram registration:")
+    return EMAIL
 
-def create_account_command(update, context):
-    update.message.reply_text("🔄 Creating Instagram account with proxy (IP Rotate)...\n⏳ Please wait 2-5 minutes...")
-    try:
-        result = create_instagram_account()
-        update.message.reply_text(result)
-    except Exception as e:
-        logger.error(f"Error in create command: {e}")
-        update.message.reply_text(f"❌ An error occurred: {str(e)}")
+def manual_email(update, context):
+    email = update.message.text.strip()
+    context.user_data['email'] = email
+    update.message.reply_text("🔐 Enter the password you want to use for Instagram registration:")
+    return PASSWORD
+
+def manual_password(update, context):
+    password = update.message.text.strip()
+    email = context.user_data['email']
+    update.message.reply_text("🚀 Creating Instagram account...")
+    result = create_instagram_account(email, password)
+    update.message.reply_text(result)
+    update.message.reply_text("⚠️ Now check your email for OTP, and finish registration manually!")
+    return ConversationHandler.END
+
+def cancel(update, context):
+    update.message.reply_text("Manual registration cancelled.")
+    return ConversationHandler.END
 
 def error_handler(update, context):
     logger.error(f"Update {update} caused error {context.error}")
 
 def main():
-    logger.info("Starting Instagram Creator Bot...")
     updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
+    manual_conv = ConversationHandler(
+        entry_points=[CommandHandler('manual', manual_start)],
+        states={
+            EMAIL: [MessageHandler(Filters.text & ~Filters.command, manual_email)],
+            PASSWORD: [MessageHandler(Filters.text & ~Filters.command, manual_password)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("create", create_account_command))
+    dp.add_handler(manual_conv)
     dp.add_error_handler(error_handler)
     updater.start_polling()
     logger.info("✅ Bot is running and connected to Telegram!")
