@@ -10,8 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram.ext import Updater, CommandHandler
 import logging
 
 # ========== CONFIGURATION ==========
@@ -29,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 def generate_random_name():
     """Generate random full name"""
-    first_names = ["John", "Emma", "Michael", "Sophia", "William", "Olivia", "James", "Ava"]
-    last_names = ["Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Anderson"]
+    first_names = ["John", "Emma", "Michael", "Sophia", "William", "Olivia", "James", "Ava", "Lucas", "Isabella"]
+    last_names = ["Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Anderson", "Thomas", "Jackson"]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 
 def generate_username():
@@ -47,8 +46,7 @@ def generate_password():
 def get_temp_mail():
     """Fetch temporary email using temp-mail.org API"""
     try:
-        # Generate random email using temp-mail.org domains
-        domains_response = requests.get("https://api.internal.temp-mail.org/request/domains/")
+        domains_response = requests.get("https://api.internal.temp-mail.org/request/domains/", timeout=10)
         if domains_response.status_code == 200:
             domains = domains_response.json()
             if domains:
@@ -67,9 +65,9 @@ def get_otp_from_temp_mail(email):
         inbox_url = f"https://api.internal.temp-mail.org/request/mail/id/{md5_email}/"
         
         logger.info("Waiting for OTP email...")
-        for attempt in range(30):  # Try for 2.5 minutes
+        for attempt in range(30):
             try:
-                response = requests.get(inbox_url)
+                response = requests.get(inbox_url, timeout=10)
                 if response.status_code == 200:
                     mails = response.json()
                     if mails:
@@ -78,7 +76,6 @@ def get_otp_from_temp_mail(email):
                             text = mail.get('mail_text_only', '') or mail.get('mail_text', '')
                             
                             if "instagram" in subject.lower() or "instagram" in text.lower():
-                                # Find 6-digit OTP code
                                 otp_match = re.search(r'\b(\d{6})\b', text)
                                 if otp_match:
                                     otp = otp_match.group(1)
@@ -106,15 +103,18 @@ def setup_driver():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    return driver
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        return driver
+    except Exception as e:
+        logger.error(f"Error setting up driver: {e}")
+        raise
 
 def create_instagram_account():
     """Main function to create Instagram account"""
     driver = None
     try:
-        # Generate account details
         email = get_temp_mail()
         if not email:
             return "❌ Failed to generate temporary email"
@@ -125,45 +125,37 @@ def create_instagram_account():
         
         logger.info(f"Creating account with email: {email}")
         
-        # Setup Selenium driver
         driver = setup_driver()
         driver.get(INSTAGRAM_SIGNUP_URL)
         time.sleep(3)
         
-        # Fill signup form
         wait = WebDriverWait(driver, 15)
         
-        # Enter email
         email_input = wait.until(EC.presence_of_element_located((By.NAME, "emailOrPhone")))
         email_input.clear()
         email_input.send_keys(email)
         time.sleep(1)
         
-        # Enter full name
         name_input = driver.find_element(By.NAME, "fullName")
         name_input.clear()
         name_input.send_keys(full_name)
         time.sleep(1)
         
-        # Enter username
         username_input = driver.find_element(By.NAME, "username")
         username_input.clear()
         username_input.send_keys(username)
         time.sleep(1)
         
-        # Enter password
         password_input = driver.find_element(By.NAME, "password")
         password_input.clear()
         password_input.send_keys(password)
         time.sleep(2)
         
-        # Click Sign Up button
         signup_button = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
         signup_button.click()
         logger.info("Submitted signup form")
         time.sleep(5)
         
-        # Handle birthday page if appears
         try:
             month_select = driver.find_element(By.XPATH, "//select[@title='Month:']")
             if month_select:
@@ -179,13 +171,12 @@ def create_instagram_account():
         except:
             pass
         
-        # Get OTP from email
         otp = get_otp_from_temp_mail(email)
         if not otp:
-            driver.quit()
+            if driver:
+                driver.quit()
             return "❌ Failed to receive OTP code"
         
-        # Enter confirmation code
         try:
             otp_input = wait.until(EC.presence_of_element_located((By.NAME, "email_confirmation_code")))
             otp_input.clear()
@@ -198,16 +189,15 @@ def create_instagram_account():
             time.sleep(5)
         except Exception as e:
             logger.error(f"Error submitting OTP: {e}")
-            driver.quit()
+            if driver:
+                driver.quit()
             return f"❌ Failed to submit OTP: {str(e)}"
         
-        # Switch to Professional Account (Creator - Personal)
         try:
             logger.info("Switching to professional account...")
             driver.get("https://www.instagram.com/accounts/edit/")
             time.sleep(5)
             
-            # Look for "Switch to Professional Account" button
             try:
                 switch_button = wait.until(EC.element_to_be_clickable(
                     (By.XPATH, "//div[contains(text(),'Switch to professional account')]")
@@ -215,11 +205,9 @@ def create_instagram_account():
                 switch_button.click()
                 time.sleep(3)
             except:
-                # Try alternative path through settings
                 driver.get("https://www.instagram.com/accounts/convert_to_professional_account/")
                 time.sleep(3)
             
-            # Select "Creator" account type
             try:
                 creator_button = wait.until(EC.element_to_be_clickable(
                     (By.XPATH, "//div[contains(text(),'Creator')]//ancestor::button")
@@ -227,14 +215,12 @@ def create_instagram_account():
                 creator_button.click()
                 time.sleep(2)
                 
-                # Click Next
                 next_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Next')]")
                 next_btn.click()
                 time.sleep(3)
             except Exception as e:
                 logger.error(f"Error selecting creator: {e}")
             
-            # Select "Personal Blog" or "Personal" category
             try:
                 personal_category = wait.until(EC.element_to_be_clickable(
                     (By.XPATH, "//div[contains(text(),'Personal') or contains(text(),'Blog')]//ancestor::button")
@@ -242,7 +228,6 @@ def create_instagram_account():
                 personal_category.click()
                 time.sleep(2)
                 
-                # Click Done
                 done_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Done') or contains(text(),'Next')]")
                 done_btn.click()
                 time.sleep(3)
@@ -251,7 +236,6 @@ def create_instagram_account():
             except Exception as e:
                 logger.error(f"Error selecting category: {e}")
             
-            # Skip contact info, email options etc
             for _ in range(3):
                 try:
                     skip_btn = driver.find_element(By.XPATH, "//button[contains(text(),'Skip') or contains(text(),'Not Now')]")
@@ -263,7 +247,8 @@ def create_instagram_account():
         except Exception as e:
             logger.error(f"Error switching to professional: {e}")
         
-        driver.quit()
+        if driver:
+            driver.quit()
         
         result = f"""
 ✅ Instagram Account Created Successfully!
@@ -285,7 +270,7 @@ def create_instagram_account():
 
 # ========== TELEGRAM BOT HANDLERS ==========
 
-def start(update: Update, context: CallbackContext):
+def start(update, context):
     """Handle /start command"""
     welcome_msg = """
 🤖 Instagram Account Creator Bot
@@ -298,7 +283,7 @@ Commands:
 """
     update.message.reply_text(welcome_msg)
 
-def help_command(update: Update, context: CallbackContext):
+def help_command(update, context):
     """Handle /help command"""
     help_msg = """
 📖 How to use:
@@ -312,7 +297,7 @@ def help_command(update: Update, context: CallbackContext):
 """
     update.message.reply_text(help_msg)
 
-def create_account_command(update: Update, context: CallbackContext):
+def create_account_command(update, context):
     """Handle /create command"""
     update.message.reply_text("🔄 Creating Instagram account...\n⏳ Please wait 2-3 minutes...")
     
@@ -323,7 +308,7 @@ def create_account_command(update: Update, context: CallbackContext):
         logger.error(f"Error in create command: {e}")
         update.message.reply_text(f"❌ An error occurred: {str(e)}")
 
-def error_handler(update: Update, context: CallbackContext):
+def error_handler(update, context):
     """Log errors"""
     logger.error(f"Update {update} caused error {context.error}")
 
@@ -331,18 +316,16 @@ def main():
     """Start the bot"""
     logger.info("Starting bot...")
     
-    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
     
-    # Add handlers
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("create", create_account_command))
     dp.add_error_handler(error_handler)
     
-    # Start bot
     updater.start_polling()
-    logger.info("Bot is running...")
+    logger.info("✅ Bot is running and connected!")
     updater.idle()
 
 if __name__ == "__main__":
