@@ -5,8 +5,8 @@ import re
 import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from telegram.ext import Updater, CommandHandler
@@ -94,7 +94,7 @@ def setup_driver(proxy=None):
     if proxy:
         options.add_argument(f'--proxy-server=http://{proxy}')
         logger.info(f"Using proxy: {proxy}")
-    # Use pre-installed chromedriver from Dockerfile (make sure it's in your Dockerfile as described in previous answers)
+    # Use the chromedriver binary installed from Dockerfile!
     service = Service('/usr/bin/chromedriver')
     return webdriver.Chrome(service=service, options=options)
 
