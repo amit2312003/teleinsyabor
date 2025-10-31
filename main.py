@@ -79,9 +79,10 @@ def robust_instagram_signup(email, password):
         driver.find_element(By.XPATH, "//select[@title='Year:']").send_keys("2001")
         driver.find_element(By.XPATH, "//button[contains(text(),'Next')]").click()
         logger.info("Birthdate submitted")
-        # Now Instagram should send OTP to email
-        time.sleep(18) # Wait for mail trigger (increase if network is slow)
+        # Wait for OTP mail trigger
+        time.sleep(18) # Change to 30 if on slow connection
         driver.quit()
+        # Return details
         return full_name, username
     except Exception as e:
         logger.error(f"Error: {e}")
@@ -142,7 +143,6 @@ async def save_pass(update, context):
 
 async def save_otp(update, context):
     otp = update.message.text.strip()
-    # Here, you would automate entering the OTP if continuing via Selenium.
     await update.message.reply_text(f"`🔑 Your OTP is: {otp}`\nComplete registration in IG browser.", parse_mode="Markdown")
     await update.message.reply_text("✅ Flow complete. Check your IG account.")
     return ConversationHandler.END
