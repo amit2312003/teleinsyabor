@@ -8,15 +8,12 @@ RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd6
     && apt-get install -y ./google-chrome-stable_current_amd64.deb \
     && rm google-chrome-stable_current_amd64.deb
 
-# ---- Here is the actual working Chromedriver install block ----
-RUN bash -c '\
-    CHROME_VERSION=$(google-chrome --version | grep -oP "\\d+\\.\\d+\\.\\d+\\.\\d+") \
-    && wget -q https://chromedriver.storage.googleapis.com/$CHROME_VERSION/chromedriver_linux64.zip \
-    && unzip chromedriver_linux64.zip \
-    && mv chromedriver /usr/bin/chromedriver \
+# Use official Chromedriver version 141 for Chrome 141.x
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/141.0.7390.0/linux64/chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/bin/chromedriver \
     && chmod +x /usr/bin/chromedriver \
-    && rm chromedriver_linux64.zip \
-'
+    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
 
 WORKDIR /app
 
