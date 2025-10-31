@@ -9,15 +9,12 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 from telegram.ext import Updater, CommandHandler
 import logging
 
-# ========== CONFIGURATION ==========
 TELEGRAM_TOKEN = "8103775533:AAGuXitKiY9USeGPlk792TPjDH7F7rNoFjg"
 INSTAGRAM_SIGNUP_URL = "https://www.instagram.com/accounts/emailsignup/"
 
-# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -25,10 +22,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def fetch_proxies_spys_one():
-    """
-    Fetch fresh proxies from the public TXT list at spys.one.
-    Returns a list of "ip:port" strings (HTTP proxies).
-    """
     proxy_url = "https://spys.me/proxy.txt"
     try:
         resp = requests.get(proxy_url, timeout=10)
@@ -36,7 +29,6 @@ def fetch_proxies_spys_one():
         if resp.status_code == 200:
             lines = resp.text.splitlines()
             for line in lines:
-                # Skip comments, blank lines
                 if line and not line.startswith("#") and ":" in line:
                     proxies.append(line.strip())
         logger.info(f"Fetched {len(proxies)} proxies from spys.one.")
@@ -59,50 +51,35 @@ def generate_password():
     chars = string.ascii_letters + string.digits + "!@#$%"
     return ''.join(random.choices(chars, k=12))
 
-def get_temp_mail():
-    try:
-        domains_response = requests.get("https://api.internal.temp-mail.org/request/domains/", timeout=10)
-        if domains_response.status_code == 200:
-            domains = domains_response.json()
-            if domains:
-                username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-                email = f"{username}{random.choice(domains)}"
-                logger.info(f"Generated temp email: {email}")
-                return email
-    except Exception as e:
-        logger.error(f"Error getting temp mail: {e}")
-    fallback_domains = ["@tmpmail.net", "@tempmail.com", "@10mail.org"]
+# Mail.tm API functions
+def create_mailtm_account():
+    domains = requests.get("https://api.mail.tm/domains").json()["hydra:member"]
+    domain = random.choice(domains)["domain"]
     username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    return f"{username}{random.choice(fallback_domains)}"
+    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+    email = f"{username}@{domain}"
+    resp = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
+    if resp.status_code not in [200, 201]:
+        raise Exception("Couldn't create mail.tm account")
+    resp = requests.post("https://api.mail.tm/token", json={"address": email, "password": password})
+    token = resp.json()["token"]
+    return email, password, token
 
-def get_otp_from_temp_mail(email):
-    try:
-        md5_email = requests.utils.quote(email)
-        inbox_url = f"https://api.internal.temp-mail.org/request/mail/id/{md5_email}/"
-        logger.info("Waiting for OTP email from temp-mail.org...")
-        for attempt in range(30):
-            try:
-                response = requests.get(inbox_url, timeout=10)
-                if response.status_code == 200:
-                    mails = response.json()
-                    if mails and isinstance(mails, list):
-                        for mail in mails:
-                            subject = mail.get('mail_subject', '').lower()
-                            text = mail.get('mail_text_only', '') or mail.get('mail_text', '')
-                            text_lower = text.lower()
-                            if "instagram" in subject or "instagram" in text_lower:
-                                otp_match = re.search(r'\b(\d{6})\b', text)
-                                if otp_match:
-                                    otp = otp_match.group(1)
-                                    logger.info(f"✅ OTP found from temp-mail.org: {otp}")
-                                    return otp
-                logger.info(f"Attempt {attempt + 1}/30: No OTP yet, waiting...")
-            except Exception as e:
-                logger.error(f"Error checking inbox: {e}")
-            time.sleep(5)
-        logger.error("❌ OTP not received within timeout from temp-mail.org")
-    except Exception as e:
-        logger.error(f"Error fetching OTP: {e}")
+def get_mailtm_otp(token, sender="instagram"):
+    headers = {"Authorization": f"Bearer {token}"}
+    for _ in range(30):
+        r = requests.get("https://api.mail.tm/messages", headers=headers)
+        mails = r.json().get("hydra:member", [])
+        for mail in mails:
+            subject = mail.get("subject", "").lower()
+            if sender in subject:
+                msgid = mail["id"]
+                msg = requests.get(f"https://api.mail.tm/messages/{msgid}", headers=headers).json()
+                text = msg.get("text", "")
+                m = re.search(r"\b(\d{6})\b", text)
+                if m:
+                    return m.group(1)
+        time.sleep(5)
     return None
 
 def setup_driver(proxy=None):
@@ -113,11 +90,12 @@ def setup_driver(proxy=None):
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     if proxy:
         options.add_argument(f'--proxy-server=http://{proxy}')
         logger.info(f"Using proxy: {proxy}")
-    service = Service(ChromeDriverManager().install())
+    # Use pre-installed chromedriver from Dockerfile (make sure it's in your Dockerfile as described in previous answers)
+    service = Service('/usr/bin/chromedriver')
     return webdriver.Chrome(service=service, options=options)
 
 def get_available_username(driver, wait, full_name, password, email):
@@ -196,9 +174,8 @@ def create_instagram_account():
         proxies_list = fetch_proxies_spys_one()
         proxy = random.choice(proxies_list) if proxies_list else None
 
-        email = get_temp_mail()
-        if not email:
-            return "❌ Failed to generate temporary email from temp-mail.org"
+        # Mail.tm email
+        email, mailtmpass, mailtmtoken = create_mailtm_account()
         full_name = generate_random_name()
         password = generate_password()
         driver = setup_driver(proxy)
@@ -217,6 +194,7 @@ def create_instagram_account():
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
         logger.info("Submitted signup form")
         time.sleep(5)
+        # birthday
         try:
             month_select = driver.find_element(By.XPATH, "//select[@title='Month:']")
             month_select.send_keys("January")
@@ -229,10 +207,10 @@ def create_instagram_account():
             time.sleep(3)
         except Exception:
             pass
-        otp = get_otp_from_temp_mail(email)
+        otp = get_mailtm_otp(mailtmtoken)
         if not otp:
             driver.quit()
-            return f"❌ Failed to receive OTP from temp-mail.org\n📧 Email used: {email}\n👤 Username: {username}\n🔐 Password: {password}"
+            return f"❌ Could not get OTP from mail.tm for: {email}"
         try:
             otp_input = wait.until(EC.presence_of_element_located((By.NAME, "email_confirmation_code")))
             otp_input.clear()
@@ -256,7 +234,7 @@ def create_instagram_account():
             f"👥 Name: {full_name}\n"
             f"💼 Type: Creator (Personal)\n"
             f"🧑‍💻 Proxy Used: {proxy}\n"
-            f"📨 OTP Source: temp-mail.org"
+            f"📨 OTP Source: mail.tm"
         )
     except Exception as e:
         if driver:
@@ -267,7 +245,7 @@ def create_instagram_account():
 def start(update, context):
     update.message.reply_text(
         "🤖 Instagram Account Creator Bot\n\n"
-        "/create - Auto-create Instagram account using temp-mail.org and live proxies\n"
+        "/create - Auto-create Instagram account using mail.tm and live proxies\n"
         "⚠️ Educational purposes only"
     )
 
@@ -275,7 +253,7 @@ def help_command(update, context):
     update.message.reply_text(
         "📖 How to use:\n"
         "1. Send /create\n"
-        "2. Bot will use a random IP (proxy) and fetch everything for you\n"
+        "2. Bot will use a random IP (proxy), register email, and fetch everything for you\n"
         "3. Wait for account details!"
     )
 
