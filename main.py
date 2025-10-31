@@ -1,7 +1,6 @@
 import time
 import random
 import string
-import re
 import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,11 +13,14 @@ import logging
 
 TELEGRAM_TOKEN = "8103775533:AAGuXitKiY9USeGPlk792TPjDH7F7rNoFjg"
 INSTAGRAM_SIGNUP_URL = "https://www.instagram.com/accounts/emailsignup/"
+ADMIN_USER_ID = 5204957178
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Manual mode states
-EMAIL, PASSWORD = range(2)
+EMAIL_ENTRY = range(1)
+admin_email = {}
+admin_pass = {}
 
 def fetch_proxies_spys_one():
     proxy_url = "https://spys.me/proxy.txt"
@@ -159,7 +161,6 @@ def create_instagram_account(email, password):
             time.sleep(3)
         except Exception:
             pass
-        # You must now handle the OTP confirmation step manually in Telegram. Bot will pause here.
         driver.quit()
         return (
             f"✅ Instagram Account Created (check your email manually for OTP)!\n\n"
@@ -176,31 +177,47 @@ def create_instagram_account(email, password):
         logger.error(f"Error creating account: {e}")
         return f"❌ Error: {str(e)}"
 
-# Telegram Handlers
+def restrict_admin(func):
+    def wrapper(update, context, *args, **kwargs):
+        if update.effective_user.id != ADMIN_USER_ID:
+            update.message.reply_text("⛔ Only admin can run this command.")
+            return ConversationHandler.END
+        return func(update, context, *args, **kwargs)
+    return wrapper
 
 def start(update, context):
     update.message.reply_text("🤖 Instagram Account Creator Bot\n\n"
-                              "/manual - Enter your email/password for registration (admin)\n"
-                              "⚠️ You will need to check your email and enter OTP manually.")
+                              "/addmail - Enter your email for registration (admin only)\n"
+                              "/addpass yourpassword - Enter your password for registration (admin only)\n"
+                              "⚠️ After submitting, check your email for OTP and finish registration manually.")
 
-def manual_start(update, context):
-    update.message.reply_text("✉️ Enter the email address you want to use for Instagram registration:")
-    return EMAIL
+@restrict_admin
+def addmail(update, context):
+    update.message.reply_text("✉️ Please send the email address to use for Instagram registration.")
+    return EMAIL_ENTRY
 
-def manual_email(update, context):
-    email = update.message.text.strip()
-    context.user_data['email'] = email
-    update.message.reply_text("🔐 Enter the password you want to use for Instagram registration:")
-    return PASSWORD
+@restrict_admin
+def addmail_entry(update, context):
+    admin_email[update.effective_user.id] = update.message.text.strip()
+    update.message.reply_text("🔐 Now send the password to use via /addpass yourpassword")
+    return ConversationHandler.END
 
-def manual_password(update, context):
-    password = update.message.text.strip()
-    email = context.user_data['email']
+@restrict_admin
+def addpass(update, context):
+    parts = update.message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        update.message.reply_text("Usage: /addpass yourpassword")
+        return
+    admin_pass[update.effective_user.id] = parts[1]
+    email = admin_email.get(update.effective_user.id)
+    password = admin_pass.get(update.effective_user.id)
+    if not email:
+        update.message.reply_text("First set email with /addmail.")
+        return
     update.message.reply_text("🚀 Creating Instagram account...")
     result = create_instagram_account(email, password)
     update.message.reply_text(result)
     update.message.reply_text("⚠️ Now check your email for OTP, and finish registration manually!")
-    return ConversationHandler.END
 
 def cancel(update, context):
     update.message.reply_text("Manual registration cancelled.")
@@ -212,16 +229,16 @@ def error_handler(update, context):
 def main():
     updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
-    manual_conv = ConversationHandler(
-        entry_points=[CommandHandler('manual', manual_start)],
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('addmail', addmail)],
         states={
-            EMAIL: [MessageHandler(Filters.text & ~Filters.command, manual_email)],
-            PASSWORD: [MessageHandler(Filters.text & ~Filters.command, manual_password)],
+            EMAIL_ENTRY: [MessageHandler(Filters.text & ~Filters.command, addmail_entry)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(manual_conv)
+    dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler('addpass', addpass))
     dp.add_error_handler(error_handler)
     updater.start_polling()
     logger.info("✅ Bot is running and connected to Telegram!")
